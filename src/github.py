@@ -1,10 +1,17 @@
-from requests.packages.urllib3.util.retry import Retry
-from github import Github, enable_console_debug_logging
-from github.GithubException import UnknownObjectException
-from time import sleep
-import requests
-from .utils import get_request_json
 from copy import deepcopy
+from time import sleep
+from typing import Dict, List, Optional
+
+import requests
+from github import Github, enable_console_debug_logging
+from github.Gist import Gist
+from github.GithubException import UnknownObjectException
+from github.Issue import Issue
+from github.PullRequest import PullRequest
+from github.Repository import Repository
+from requests.packages.urllib3.util.retry import Retry
+
+from .utils import get_request_json
 
 
 class GithubImport:
@@ -12,61 +19,45 @@ class GithubImport:
         if debug:
             enable_console_debug_logging()
         self.access_token = access_token
-        retry = Retry(
-            total=30,
-            connect=5,
-            read=5,
-            backoff_factor=0.5,
-            status_forcelist=(500, 502, 503, 504)
-        )
+        retry = Retry(total=30, connect=5, read=5, backoff_factor=0.5, status_forcelist=(500, 502, 503, 504))
         self.github = Github(access_token, timeout=30, retry=retry, per_page=300)
         try:
-            self.repo = self.github.get_repo(repository)
+            self.repo: Repository = self.github.get_repo(repository)
         except UnknownObjectException:
-            raise Exception("Failed to get the repository '{}'".format(repository))
+            raise Exception(f"Failed to get the repository '{repository}'")
 
-    def get_repo_full_name(self):
+    def get_repo_full_name(self) -> str:
         return self.repo.full_name
 
-    def get_remaining_rate_limit(self):
+    def get_remaining_rate_limit(self) -> int:
         return self.github.rate_limiting[0]
 
-    def get_issues_count(self):
+    def get_issues_count(self) -> int:
         return self.repo.get_issues(state="all").totalCount
 
-    def get_pulls_count(self):
+    def get_pulls_count(self) -> int:
         return self.repo.get_pulls(state="all").totalCount
 
-    def get_issues(self):
+    def get_issues(self) -> Dict[int, Issue]:
         issues = self.repo.get_issues(state="all")
         return {x.number: x for x in issues}
 
-    def get_pulls(self):
+    def get_pulls(self) -> Dict[int, PullRequest]:
         pulls = self.repo.get_pulls(state="all")
         return {x.number: x for x in pulls}
 
-    def get_gist_by_description(self, description):
-        return next(
-            (
-                x for x in self.github.get_user().get_gists()
-                if x.description == description
-            ),
-            None
-        )
+    def get_gist_by_description(self, description) -> Optional[Gist]:
+        return next((x for x in self.github.get_user().get_gists() if x.description == description), None)
 
-    def get_or_create_gist_by_description(self, gist_data):
+    def get_or_create_gist_by_description(self, gist_data) -> Gist:
         gist = self.get_gist_by_description(gist_data["description"])
         if gist is None:
-            gist = self.github.get_user().create_gist(
-                True,
-                gist_data["files"],
-                gist_data["description"]
-            )
+            gist = self.github.get_user().create_gist(True, gist_data["files"], gist_data["description"])
         else:
             gist.edit(gist_data["description"], gist_data["files"])
         return gist
 
-    def create_issue_with_comments(self, issue_data):
+    def create_issue_with_comments(self, issue_data: Dict, dry_run: bool) -> None:
         """
         Push a single issue to GitHub.
         Importing via GitHub's normal Issue API quickly triggers anti-abuse rate
@@ -74,11 +65,14 @@ class GithubImport:
         https://gist.github.com/jonmagic/5282384165e0f86ef105
         https://github.com/nicoddemus/bitbucket_issue_migration/issues/1
         """
-        url = "https://api.github.com/repos/{repo}/import/issues".format(
-            repo=self.get_repo_full_name())
+        if dry_run:
+            print(f"Would create issue with data {issue_data}")
+            return
+
+        url = f"https://api.github.com/repos/{self.get_repo_full_name()}/import/issues"
         headers = {
-            "Authorization": "token {}".format(self.access_token),
-            "Accept": "application/vnd.github.golden-comet-preview+json"
+            "Authorization": f"token {self.access_token}",
+            "Accept": "application/vnd.github.golden-comet-preview+json",
         }
         res = requests.post(url, json=issue_data, headers=headers)
         if not res.ok:
@@ -94,19 +88,23 @@ class GithubImport:
             import_status = import_data["status"]
 
         if import_status != "imported":
-            print("Warning: import status is '{}'.".format(import_status))
+            print(f"Warning: import status is '{import_status}'.")
         if import_status == "failed":
-            print("Retrying...".format(import_status))
-            self.slow_create_issue_with_comments(issue_data)
+            print(f"Retrying... (import status '{import_status}')")
+            self.slow_create_issue_with_comments(issue_data, dry_run)
 
-    def update_issue_comments(self, issue, comments_data):
+    def update_issue_comments(self, issue: Issue, comments_data: List[Dict], dry_run: bool) -> None:
         issue_id = issue.number
+        if dry_run:
+            print(f"Would update issue {issue_id} comments")
+            return
+
         num_comments = len(comments_data)
         existing_comments = list(issue.get_comments())
 
         # Create or update comments
         for comment_num, comment_data in enumerate(comments_data):
-            print("Set comment {}/{} of github issue #{}...".format(comment_num + 1, num_comments, issue_id))
+            print(f"Set comment {comment_num + 1}/{num_comments} of github issue #{issue_id}...")
             comment_body = comment_data["body"]
             if comment_num < len(existing_comments):
                 existing_comments[comment_num].edit(comment_body)
@@ -116,39 +114,51 @@ class GithubImport:
         # Delete comments in excess
         comments_to_delete = existing_comments[num_comments:]
         for i, gcomment in enumerate(comments_to_delete):
-            print("Delete extra gituhb comment {}/{} of issue #{}...".format(i + 1, len(comments_to_delete), issue_id))
+            print(f"Delete extra GitHub comment {i + 1}/{len(comments_to_delete)} of issue #{issue_id}...")
             gcomment.delete()
 
-    def update_issue_with_comments(self, issue, issue_data):
+    def update_issue_with_comments(self, issue: Issue, issue_data: Dict, dry_run: bool) -> None:
         meta = issue_data["issue"]
+        if dry_run:
+            print(f"Would update issue {issue.number} with {meta}")
+            return
+
         issue.edit(
             title=meta["title"],
             body=meta["body"],
             labels=meta["labels"],
             state="closed" if meta["closed"] else "open",
-            assignees=[] if meta["assignee"] is None else [meta["assignee"]]
+            assignees=[] if meta["assignee"] is None else [meta["assignee"]],
         )
-        self.update_issue_comments(issue, issue_data["comments"])
+        self.update_issue_comments(issue, issue_data["comments"], dry_run=dry_run)
 
-    def slow_create_issue_with_comments(self, issue_data):
+    def slow_create_issue_with_comments(self, issue_data: Dict, dry_run: bool) -> None:
         meta = issue_data["issue"]
+        if dry_run:
+            print(f"Would create issue with {issue_data}")
+            return
+
         issue = self.repo.create_issue(
             title=meta["title"],
             body=meta["body"],
             labels=meta["labels"],
-            assignees=[] if meta["assignee"] is None else [meta["assignee"]]
+            assignees=[] if meta["assignee"] is None else [meta["assignee"]],
         )
         issue.edit(state="closed" if meta["closed"] else "open")
-        self.update_issue_comments(issue, issue_data["comments"])
+        self.update_issue_comments(issue, issue_data["comments"], dry_run=dry_run)
 
-    def update_pull_comments(self, pull, comments_data):
+    def update_pull_comments(self, pull: PullRequest, comments_data: List[Dict], dry_run: bool) -> None:
         pull_id = pull.number
+        if dry_run:
+            print(f"Would update pull {pull_id} comments")
+            return
+
         num_comments = len(comments_data)
         existing_comments = list(pull.get_issue_comments())
 
         # Create or update comments
         for comment_num, comment_data in enumerate(comments_data):
-            print("Set comment {}/{} of github pull request #{}...".format(comment_num + 1, num_comments, pull_id))
+            print(f"Set comment {comment_num + 1}/{num_comments} of github pull request #{pull_id}...")
             comment_body = comment_data["body"]
             if comment_num < len(existing_comments):
                 existing_comments[comment_num].edit(comment_body)
@@ -157,12 +167,15 @@ class GithubImport:
 
         # Delete comments in excess
         comments_to_delete = existing_comments[num_comments:]
-        for i, gcomment in enumerate(comments_to_delete):
-            print("Delete extra gituhb comment {}/{} of pull request #{}...".format(i + 1, len(comments_to_delete), pull_id))
-            gcomment.delete()
+        for i, gh_comment in enumerate(comments_to_delete):
+            print(f"Delete extra github comment {i + 1}/{len(comments_to_delete)} of pull request #{pull_id}...")
+            gh_comment.delete()
 
-    def update_pull_with_comments(self, pull, pull_data):
+    def update_pull_with_comments(self, pull: PullRequest, pull_data: Dict, dry_run: bool) -> None:
         meta = pull_data["pull"]
+        if dry_run:
+            print(f"Would update pull {pull.number} with {meta}")
+            return
         assert meta["head"] == pull.head.ref
         pull.edit(
             title=meta["title"],
@@ -171,21 +184,21 @@ class GithubImport:
             base=meta["base"],
         )
         pull.set_labels(*meta["labels"])
-        pull.remove_from_assignees(*[
-            x.name for x in pull.assignees
-            if x.name not in meta["assignees"]
-        ])
+        pull.remove_from_assignees(*[x.name for x in pull.assignees if x.name not in meta["assignees"]])
         pull.add_to_assignees(*meta["assignees"])
         (reviewers, team_reviewers) = pull.get_review_request()
         pull.delete_review_request(
-            reviewers=[u.name for u in reviewers],
-            team_reviewers=[u.name for u in team_reviewers]
+            reviewers=[u.name for u in reviewers], team_reviewers=[u.name for u in team_reviewers]
         )
         pull.create_review_request(reviewers=meta["reviewers"])
-        self.update_pull_comments(pull, pull_data["comments"])
+        self.update_pull_comments(pull, pull_data["comments"], dry_run)
 
-    def create_pull_with_comments(self, pull_data):
+    def create_pull_with_comments(self, pull_data: Dict, dry_run: bool) -> None:
         meta = pull_data["pull"]
+        if dry_run:
+            print(f"Would create pull with {pull_data}")
+            return
+
         pull = self.repo.create_pull(
             title=meta["title"],
             body=meta["body"],

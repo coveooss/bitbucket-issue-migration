@@ -2,63 +2,78 @@
 
 Warning: use at your own risk, comes with no warranty or liability of any kind. 
 
-* Create a GitHub repository with the same name (URL) of the original repository in BitBucket.
-* Copy the description of the repository.
-* Set the `USER_MAPPING`, `KNOWN_REPO_MAPPING`, `KNOWN_ISSUES_COUNT_MAPPING`, and `KNOWN_CMAP_PATHS` variables in `config.py`.
-* Inspect Mercurial authors with `hg log --template "{author}\n"` and add entries to `migration_data/authors.map`.
+* Set the `USER_MAPPING`, and `KNOWN_REPO_MAPPING` variables in `config.py`.
 * Run the main migration script and observe for errors:
 
 ```
-./main.py \
-    --github-access-token=<github's personal access token> \
-    --hg-fast-export-path=<path to hg-fast-export.sh> \
-    --hg-authors-map=migration_data/authors.map \
-    --hg-branches-map=migration_data/branches.map \
-    [space separated list of bitbucket repositories to migrate]
+Usage: main.py [OPTIONS] BITBUCKET_REPOSITORIES...
+
+  Migrate repositories from Bitbucket to Github
+
+Arguments:
+  BITBUCKET_REPOSITORIES...  [required]
+
+Options:
+  --github-username TEXT          [env var: GITHUB_USERNAME; default:
+                                  x-access-token]
+
+  --github-access-token TEXT      An access token is required for repository
+                                  creation  [env var: GITHUB_ACCESS_TOKEN;
+                                  required]
+
+  --bitbucket-username TEXT       [env var: BITBUCKET_USERNAME; required]
+  --bitbucket-password TEXT       [env var: BITBUCKET_PASSWORD; required]
+  --clone / --no-clone            Skip clone/pull and repo creation in GitHub.
+                                  Go directly to issues and Pull Requests
+                                  migration.  [default: True]
+
+  --dry-run / --no-dry-run        Only list issues that would be
+                                  created/updated  [default: False]
+
+  --update / --no-update          Skip update of existing issues  [default:
+                                  True]
+
+  --skip-attachments / --no-skip-attachments
+                                  Skip the migration of attachments
+                                  (development only!)  [default: False]
+
+  --install-completion [bash|zsh|fish|powershell|pwsh]
+                                  Install completion for the specified shell.
+  --show-completion [bash|zsh|fish|powershell|pwsh]
+                                  Show completion for the specified shell, to
+                                  copy it or customize the installation.
+
+  --help                          Show this message and exit.
 ```
 
-* Copy Wiki by hand from the original repository.
-* Change the description of the original repository (BitBucket) to the following:
-  * IMPORTANT: the official repository is now at https://github.com/viperproject/...
 * Prevent commits in the original repository by changing its settings (BitBucket):
   * All users except for 'admin' should have 'read' permission only.
 * Adapt the corresponding Jenkins jobs accordingly.
-
-Alternative manual steps:
-* Clone your mercurial repos
-* `python3 import-forks.py --repo <path to hg repo> --bitbucket-repository <e.g. viperproject/silver> --bitbucket-username <Bitbucket username> --bitbucket-password <Bitbucket app password>`
-* Create folder, `git init`, and `git config core.ignoreCase false`
-* Run `<path to hg-fast-export.sh> -r <path to hg repo> --hg-hash` in the git folder
-* Adapt `config.py` to have an entry for the bitbucket-repository in `KNOWN_CMAP_PATHS`
-* Run `python3 hg-git-commit-map.py --repo <path to git folder> --bitbucket-repository <e.g. viperproject/silver>`
-* Push the local git repository to github
-* Adapt `config.py` to correctly capture the Bitbucket repos, their GitHub correspondance, and the number of issues
-* Run `python3 migrate-discussions.py --github-access-token <GitHub access token> --bitbucket-repository <e.g. viperproject/silver> --github-repository <e.g. viperproject/silver>` to migrate the issues and pull requests (again for all repositories)
-
-
-This project reuses some code from https://github.com/jeffwidman/bitbucket-issue-migration and https://github.com/fkirc/bitbucket-issues-to-github
 
 ## Features
 
 This script migrates:
 
+* Bitbucket repository to GitHub repository (repository object creation in API)
 * Bitbucket's attachments to Github's gists
-* Bitbucket's issues `#1..#n` to Github's issues `#1..#n`
+* Bitbucket's issues to Github's issues
   * Bitbucket's issue changes and comments to Github's comments
   * Bitbucket's issue state, kind, priority and component to Github's labels
-* Bitbucket's pull requests `#1..#m` to Github's issues and pull requests `#(n+1)..#(n+m)`
+* Bitbucket's pull requests to Github's issues and pull requests
   * Closed Bitbucket's pull request to closed Github's issues
   * Open Bitbucket's pull request to Github's pull requests
   * Bitbucket's pull request activity and comments to Github's comments
   * Bitbucket's pull request state to Github's labels
 
-Within a comment:
+The script is idempotent. It can be run several times for the same repository without overriding data from previous attempts.
 
-* Bitbucket's user mentions to Github's user mentions
-* Bitbucket's issue and pull request links to Github's issue links
-* ...
+## Limitations
 
+* Issue numbers are not kept. Instead the title in GitHub contains a reference to the original ID in Bitbucket
 
-## Install dependencies
+## Requirements
 
+Python 3.8+
+
+Install requirements with
 `pip3 install -r requirements.pip`
