@@ -12,6 +12,7 @@ from github.GithubException import GithubException, UnknownObjectException
 
 import config
 from src import migrate_discussions
+from src.bitbucket import BitbucketExport
 
 ROOT = os.path.abspath(os.path.dirname(__file__))
 MIGRATION_DATA_DIR = os.path.join(ROOT, "migration_data")
@@ -56,7 +57,9 @@ def main(
     clone: bool = typer.Option(
         True, help="Skip clone/pull and repo creation in GitHub. Go directly to issues and Pull Requests migration."
     ),
-    dry_run: bool = typer.Option(False, help="Only list issues that would be created/updated"),
+    dry_run: bool = typer.Option(
+        False, help="Only list issues that would be created/updated. Does not apply to repository creation."
+    ),
     update: bool = typer.Option(True, help="Skip update of existing issues"),
     skip_attachments: bool = typer.Option(False, help="Skip the migration of attachments (development only!)"),
 ):
@@ -68,6 +71,8 @@ def main(
 
     if clone:
         for bb_repo, gh_repo in repositories_to_migrate.items():
+            bitbucket_client = BitbucketExport(bb_repo, username=bitbucket_username, app_password=bitbucket_password)
+
             step(f"Ensuring GitHub repo exists")
             try:
                 _ = github.get_repo(gh_repo)
@@ -76,7 +81,10 @@ def main(
                 organization_name, repo_name = gh_repo.split("/")
                 github.get_organization(organization_name).create_repo(
                     repo_name,
-                    description=f"Migrated from Bitbucket https://bitbucket.org/{bb_repo}",
+                    description=(
+                        f"Migrated from Bitbucket https://bitbucket.org/{bb_repo}\n"
+                        f"{bitbucket_client.get_repo_description()}"
+                    ),
                     private=True,
                     has_issues=True,
                     auto_init=False,

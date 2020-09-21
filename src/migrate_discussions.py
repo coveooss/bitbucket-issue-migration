@@ -47,10 +47,24 @@ def map_bb_user_to_gh_user(bb_user: Dict):
     return config.USER_MAPPING.get(nickname)
 
 
-def map_bb_repo_to_gh_repo(bb_repo: str):
+def map_bb_repo_to_gh_repo(bb_repo: str) -> Optional[str]:
     if bb_repo not in config.KNOWN_REPO_MAPPING:
         return None
-    return config.KNOWN_REPO_MAPPING[bb_repo]
+    return config.KNOWN_REPO_MAPPING.get(bb_repo)
+
+
+def construct_link_to_repo(run_data: MigrationConfig, commit_hash: Optional[str]) -> str:
+    gh_repo = map_bb_repo_to_gh_repo(run_data.bb_export.get_repo_full_name())
+    if gh_repo:
+        link = f"https://github.com/{gh_repo}"
+        if commit_hash:
+            link += f"/commit/{commit_hash}"
+        return link
+    else:
+        link = f"https://bitbucket.org/{run_data.bb_export.get_repo_full_name()}"
+        if commit_hash:
+            link += f"/commits/{commit_hash}"
+        return link
 
 
 def map_bb_state_to_gh_labels(bb_issue: Dict):
@@ -154,13 +168,15 @@ def construct_gh_comment_body(bb_comment: Dict[str, Any], run_data: MigrationCon
             diff_url = urlparse(bb_comment["links"]["code"]["href"])
             snippet_commit = diff_url.path.split("..")[-1]
             if snippet_commit is not None:
-                snippet_file_url = f"https://github.com/{map_bb_repo_to_gh_repo(run_data.bb_export.get_repo_full_name())}/blob/{snippet_commit}/{file_path}"
-                snippet_url_status = requests.get(snippet_file_url).status_code
-                show_snippet = snippet_url_status == 200
-                if snippet_url_status == 404:
-                    print(f"Warning: page '{snippet_file_url}' does not exist")
-                if snippet_url_status not in (200, 404):
-                    print(f"Warning: page '{snippet_file_url}'")
+                gh_repo = map_bb_repo_to_gh_repo(run_data.bb_export.get_repo_full_name())
+                if gh_repo is not None:
+                    snippet_file_url = f"https://github.com/{gh_repo}/blob/{snippet_commit}/{file_path}"
+                    snippet_url_status = requests.get(snippet_file_url).status_code
+                    show_snippet = snippet_url_status == 200
+                    if snippet_url_status == 404:
+                        print(f"Warning: page '{snippet_file_url}' does not exist")
+                    if snippet_url_status not in (200, 404):
+                        print(f"Warning: page '{snippet_file_url}'")
 
         sb.append(">\n")
         if inline_data["from"] is None and inline_data["to"] is None:
@@ -263,32 +279,24 @@ def construct_gh_pull_request_body(bb_pull: Dict[str, Any], run_data: MigrationC
         source_gh_repo = map_bb_repo_to_gh_repo(run_data.bb_export.get_repo_full_name())
         if source_hash is None:
             message = f"> Source: unidentified commit on branch `{source_branch}`\n"
+        elif source_gh_repo is not None:
+            message = f"> Source: {construct_link_to_repo(run_data, source_hash)} on branch `{source_branch}`\n"
         else:
-            message = (
-                f"> Source: https://github.com/{source_gh_repo}/commit/{source_hash} on branch `{source_branch}`\n"
-            )
+            message = f"> Source: Commit `{source_hash}` on branch `{source_branch}`"
         sb.append(message)
 
     destination = bb_pull["destination"]
-    destination_brepo = destination["repository"]["full_name"]
+    destination_bb_repo = destination["repository"]["full_name"]
     destination_branch = destination["branch"]["name"]
-    destination_bcommit = destination["commit"]
-    destination_hash = destination_bcommit["hash"] if destination_bcommit else None
-    destination_grepo = map_bb_repo_to_gh_repo(destination_brepo)
-    if destination_brepo != run_data.bb_export.get_repo_full_name():
+    destination_bb_commit = destination["commit"]
+    destination_hash = destination_bb_commit["hash"] if destination_bb_commit else None
+    if destination_bb_repo != run_data.bb_export.get_repo_full_name():
         print(
-            f"Error: the destination of a pull request, '{destination_brepo}', "
+            f"Error: the destination of a pull request, '{destination_bb_repo}', "
             f"is not '{run_data.bb_export.get_repo_full_name()}'."
         )
 
-    if not destination_hash:
-        message = f"> Destination: https://github.com/{destination_grepo} on branch {destination_branch}\n"
-    else:
-        message = (
-            f"> Destination: https://github.com/{destination_grepo}/commit/{destination_hash} "
-            f"on branch `{destination_branch}`\n"
-        )
-    sb.append(message)
+    sb.append(f"> Destination: {construct_link_to_repo(run_data, destination_hash)} on branch {destination_branch}\n")
 
     if bb_pull["merge_commit"] is not None:
         merge_bb_repo = run_data.bb_export.get_repo_full_name()
@@ -374,11 +382,6 @@ def construct_gh_issue_comments(
     return comments
 
 
-def construct_gist_description_for_issue_attachments(bb_issue: Dict[str, Any], bb_export: BitbucketExport) -> str:
-    gh_repo_name = map_bb_repo_to_gh_repo(bb_export.get_repo_full_name())
-    return f"Attachments for issue https://github.com/{gh_repo_name}/issues/{bb_issue['id']}"
-
-
 def construct_gist_from_bb_issue_attachments(
     bb_issue: Dict[str, Any], bb_export: BitbucketExport
 ) -> Optional[Dict[str, Union[str, Dict[str, InputFileContent]]]]:
@@ -388,7 +391,7 @@ def construct_gist_from_bb_issue_attachments(
     if not bb_attachments:
         return None
 
-    gist_description = construct_gist_description_for_issue_attachments(bb_issue, bb_export)
+    gist_description = f"Attachments from Bitbucket issue {bb_issue['id']}"
     gist_files = {"# README.md": InputFileContent(gist_description)}
 
     for name in bb_attachments.keys():
@@ -587,7 +590,7 @@ def find_bb_id_in_gh_issue_or_pull(
 def print_limit(run_data: MigrationConfig) -> None:
     remaining_limit = run_data.gh_import.get_remaining_rate_limit()
     print(f"Remaining GitHub limit: {remaining_limit}")
-    if remaining_limit < 1:
+    if remaining_limit < 500:
         time.sleep(2)
 
 
@@ -618,7 +621,7 @@ def bitbucket_to_github(run_data: MigrationConfig):
     # Migrate attachments
     attachment_gist_by_issue_id: Dict[int, Gist] = {}
     if not run_data.skip_attachments:
-        print("Migrate bitbucket attachments to github...")
+        print("Migrate Bitbucket attachments to github...")
         for bb_issue in bb_issues:
             issue_id = bb_issue["id"]
             print(f"Migrate attachments for bitbucket issue #{issue_id}...")

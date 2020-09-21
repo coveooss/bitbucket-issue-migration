@@ -35,6 +35,10 @@ class BitbucketExport:
     def get_repo_full_name(self):
         return self.repository_name
 
+    def get_repo_description(self) -> str:
+        repository = get_request_content(self.repo_url, self.session)
+        return repository["description"]
+
     def get_issues(self) -> List[Dict[str, Any]]:
         print("Get all bitbucket issues...")
         try:
