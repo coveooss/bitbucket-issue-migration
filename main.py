@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-import argparse
-import config
-import os
-from subprocess import check_call
-import pathlib
-from send2trash import send2trash
-from github import Github
-from github.GithubException import GithubException
-#from getpass import getpass
 import datetime
+import os
+import pathlib
+from subprocess import check_call
+from typing import List, Optional
+
+import typer
+from git import Repo
+from github import Github
+from github.GithubException import GithubException, UnknownObjectException
+
+import config
+from src import migrate_discussions
+from src.bitbucket import BitbucketExport
 
 ROOT = os.path.abspath(os.path.dirname(__file__))
 MIGRATION_DATA_DIR = os.path.join(ROOT, "migration_data")
@@ -42,180 +46,115 @@ def is_github_repo_empty(github, grepo):
         return e.args[1]["message"] == "This repository is empty."
 
 
-def create_parser():
-    parser = argparse.ArgumentParser(
-        prog="migrate",
-        description="Migrate mercurial repositories from Bitbucket to Github"
-    )
-    parser.add_argument(
-        "--github-username",
-        help="GitHub username",
-        required=True
-    )
-    parser.add_argument(
-        "-t", "--github-access-token",
-        help="Github Access Token",
-        required=True
-    )
-    parser.add_argument(
-        "--git-lfs",
-        help="Extension of files that should be stored in Git LFS"
-    )
-    parser.add_argument(
-        "--hg-fast-export-path",
-        help="Path to the hg-fast-export.sh script",
-        required=True
-    )
-    parser.add_argument(
-        "--hg-authors-map",
-        help="Path to the author mapping file required by hg-fast-export.sh",
-        required=True
-    )
-    parser.add_argument(
-        "--hg-branches-map",
-        help="Path to the branch mapping file required by hg-fast-export.sh",
-        required=True
-    )
-    parser.add_argument(
-        "--bitbucket-username",
-        help="Bitbucket username"
-    )
-    parser.add_argument(
-        "--bitbucket-password",
-        help="Bitbucket password"
-    )
-    parser.add_argument(
-        "--skip-stuff",
-        help="Skip some stuff (development only!)",
-        action="store_true"
-    )
-    parser.add_argument(
-        "--skip-attachments",
-        help="Skip the migration of attachments (development only!)",
-        action="store_true"
-    )
-    parser.add_argument(
-        "bitbucket_repositories",
-        nargs="+",
-        help="List of the Bitbucket repositories that should migrate to Github"
-    )
-    return parser
+def main(
+    bitbucket_repositories: List[str],
+    github_username: str = typer.Option("x-access-token", envvar="GITHUB_USERNAME"),
+    github_access_token: str = typer.Option(
+        ..., envvar="GITHUB_ACCESS_TOKEN", help="An access token is required for repository creation", prompt=True
+    ),
+    bitbucket_username: str = typer.Option(..., envvar="BITBUCKET_USERNAME", prompt=True),
+    bitbucket_password: str = typer.Option(..., envvar="BITBUCKET_PASSWORD", prompt=True),
+    clone: bool = typer.Option(
+        True, help="Skip clone/pull and repo creation in GitHub. Go directly to issues and Pull Requests migration."
+    ),
+    migrate_issues: bool = typer.Option(True, help="Migrate the issues and pull requests"),
+    specific_issues: Optional[List[str]] = typer.Option(
+        None, help="ID of specific Bitbucket issues to migrate, will ignore all others"
+    ),
+    specific_pulls: Optional[List[str]] = typer.Option(
+        None, help="ID of specific Bitbucket Pull Requests to migrate, will ignore all others"
+    ),
+    dry_run: bool = typer.Option(
+        False, help="Only list issues that would be created/updated. Does not apply to repository creation."
+    ),
+    update: bool = typer.Option(True, help="Skip update of existing issues"),
+    skip_attachments: bool = typer.Option(False, help="Skip the migration of attachments (development only!)"),
+):
+    """Migrate repositories from Bitbucket to Github"""
+    repositories_to_migrate = {bb_repo: config.KNOWN_REPO_MAPPING[bb_repo] for bb_repo in bitbucket_repositories}
+    print("Bitbucket repositories to be migrated: {}".format(", ".join(repositories_to_migrate.keys())))
 
+    github = Github(github_access_token, timeout=30, retry=3, per_page=100)
 
-def main():
-    parser = create_parser()
-    args = parser.parse_args()
+    if clone:
+        for bb_repo, gh_repo in repositories_to_migrate.items():
+            bitbucket_client = BitbucketExport(bb_repo, username=bitbucket_username, app_password=bitbucket_password)
 
-    repositories_to_migrate = {
-        brepo: config.KNOWN_REPO_MAPPING[brepo]
-        for brepo in args.bitbucket_repositories
-    }
-    print("Bitbucket repositories to be migrated: {}".format(
-        ", ".join(repositories_to_migrate.keys())
-    ))
+            step(f"Ensuring GitHub repo exists")
+            try:
+                _ = github.get_repo(gh_repo)
+            except UnknownObjectException:
+                print(f"Repo {gh_repo} does not exist in GitHub, creating...")
+                organization_name, repo_name = gh_repo.split("/")
+                github.get_organization(organization_name).create_repo(
+                    repo_name,
+                    description=(
+                        f"{bitbucket_client.get_repo_description()}\n"
+                        f"Migrated from Bitbucket https://bitbucket.org/{bb_repo}"
+                    ),
+                    private=True,
+                    has_issues=True,
+                    auto_init=False,
+                    allow_squash_merge=True,
+                )
 
-    github = Github(args.github_access_token, timeout=30, retry=3, per_page=100)
+            step(f"Checking local repository for '{gh_repo}'")
+            git_folder = os.path.join(MIGRATION_DATA_DIR, "github", gh_repo)
 
-    args.hg_authors_map = os.path.abspath(args.hg_authors_map)
-    while not os.path.isfile(args.hg_authors_map):
-        print("Error: The author mapping file '{}' does not exist. Please create it.".format(args.hg_authors_map))
-        input("Press Enter to retry...")
+            if not os.path.isdir(git_folder):
+                pathlib.Path(git_folder).mkdir(parents=True, exist_ok=True)
+                print(f"Cloning Bitbucket repo https://bitbucket.org/{bb_repo} into {git_folder}")
+                repo = Repo.clone_from(f"https://bitbucket.org/{bb_repo}", git_folder)
+                repo.config_writer().set_value("core", "ignoreCase", "false")
+            else:
+                repo = Repo(git_folder)
+                bb_remote = None
+                for remote in repo.remotes:
+                    if any("bitbucket.org" in url for url in remote.urls):
+                        bb_remote = remote
+                        continue
+                if not bb_remote:
+                    bb_remote = repo.create_remote(
+                        "bitbucket", f"https://{bitbucket_username}:{bitbucket_password}@bitbucket.org/{bb_repo}"
+                    )
+                print(f"Pulling Bitbucket repo https://bitbucket.org/{bb_repo} into {git_folder}")
+                bb_remote.pull()
 
-    args.hg_branches_map = os.path.abspath(args.hg_branches_map)
-    while not os.path.isfile(args.hg_branches_map):
-        print("Error: The branch mapping file '{}' does not exist. Please create it.".format(args.hg_branches_map))
-        input("Press Enter to retry...")
+            step(f"Adding/Ensuring remote github '{gh_repo}' to local git repository")
+            for remote in repo.remotes:
+                if remote.name == "github":
+                    gh_remote = remote
+                    break
+            else:
+                gh_remote = repo.create_remote(
+                    "github", f"https://{github_username}:{github_access_token}@github.com/{gh_repo}.git"
+                )
 
-    #if args.bitbucket_password is None:
-    #    args.bitbucket_password = getpass(prompt="Password of Bitbucket's user '{}': ".format(args.bitbucket_username))
+            step(f"Pushing Bitbucket repo '{bb_repo}' to GitHub repo '{gh_repo}'")
 
-    if not args.skip_stuff:
-        for brepo, grepo in repositories_to_migrate.items():
-            step("Cloning bitbucket repository '{}' to local mercurial repository".format(brepo))
-            hg_folder = os.path.join(MIGRATION_DATA_DIR, "bitbucket", brepo)
-            brepo_url = bitbucket_repo_url(brepo, args.bitbucket_username, args.bitbucket_password)
-            if os.path.isdir(hg_folder):
-                send2trash(hg_folder)
-            pathlib.Path(hg_folder).mkdir(parents=True, exist_ok=True)
-            execute("hg clone " + brepo_url + " " + hg_folder, cwd=MIGRATION_DATA_DIR)
+            # --mirror pushes the remotes too, let's push all branches and tags
 
-        for brepo, grepo in repositories_to_migrate.items():
-            hg_folder = os.path.join(MIGRATION_DATA_DIR, "bitbucket", brepo)
-            step("Importing forks of bitbucket repository '{}' into local mercurial repository".format(brepo))
-            execute("./import-forks.py --verbose --repo {} --bitbucket-repository {} {}{}".format(
-                hg_folder,
-                brepo,
-                "--bitbucket-username {} ".format(args.bitbucket_username) if args.bitbucket_username is not None else "",
-                "--bitbucket-password {} ".format(args.bitbucket_password) if args.bitbucket_password is not None else "",
-            ), cwd=ROOT)
+            # Pushes branches from the GitHub remote without needing to add them locally
+            gh_remote.push(f"refs/remotes/{gh_remote.name}/*:refs/heads/*")
 
-        for brepo, grepo in repositories_to_migrate.items():
-            step("Preparing local git repository for '{}'".format(grepo))
-            git_folder = os.path.join(MIGRATION_DATA_DIR, "github", grepo)
-            if os.path.isdir(git_folder):
-                send2trash(git_folder)
-            pathlib.Path(git_folder).mkdir(parents=True, exist_ok=True)
-            execute("git init", cwd=git_folder)
-            execute("git config core.ignoreCase false", cwd=git_folder)
-            if args.git_lfs is not None:
-                execute("git lfs track '*.{}'".format(args.git_lfs), cwd=git_folder)
-                execute("git add .gitattributes", cwd=git_folder)
+            gh_remote.push("refs/tags/*:refs/tags/*")
 
-        for brepo, grepo in repositories_to_migrate.items():
-            step("Converting local mercurial repository of '{}' to git".format(brepo))
-            hg_folder = os.path.join(MIGRATION_DATA_DIR, "bitbucket", brepo)
-            git_folder = os.path.join(MIGRATION_DATA_DIR, "github", grepo)
-            execute("{} -r {} -A {} -B {} --hg-hash ".format(
-                args.hg_fast_export_path,
-                hg_folder,
-                args.hg_authors_map,
-                args.hg_branches_map
-            ), cwd=git_folder)
-
-        for brepo, grepo in repositories_to_migrate.items():
-            step("Mapping local mercurial commit hashes of '{}' to git".format(brepo))
-            git_folder = os.path.join(MIGRATION_DATA_DIR, "github", grepo)
-            execute("./hg-git-commit-map.py --repo {} --bitbucket-repository {}".format(
-                git_folder,
-                brepo
-            ), cwd=ROOT)
-
-        for brepo, grepo in repositories_to_migrate.items():
-            step("Adding remote github '{}' to local git repository".format(grepo))
-            git_folder = os.path.join(MIGRATION_DATA_DIR, "github", grepo)
-            execute("git remote add origin {}".format(
-                github_repo_url(grepo)
-            ), cwd=git_folder)
-
-    for brepo, grepo in repositories_to_migrate.items():
-        step("Checking github repository '{}'".format(grepo))
-        while not is_github_repo_empty(github, grepo):
-            print("Error: Github repository '{}' is non-empty. Please delete and recreate it.".format(grepo))
-            input("Press Enter to retry...")
-
-    for brepo, grepo in repositories_to_migrate.items():
-        step("Converting local git repository to HTTPS: '{}'".format(grepo))
-        git_folder = os.path.join(MIGRATION_DATA_DIR, "github", grepo)
-        execute("git remote set-url origin https://{}:{}@github.com/{}.git".format(args.github_username, args.github_access_token, grepo), cwd=git_folder)
-        if args.git_lfs is not None:
-            step("Converting '{}' files to Git LFS in repository '{}'".format(args.git_lfs, grepo))
-            execute("git lfs migrate import --include='*.{}' --everything --yes".format(args.git_lfs), cwd=git_folder)
-        step("Pushing local git repository to github repository '{}'".format(grepo))
-        execute("git push --set-upstream origin master", cwd=git_folder)
-        execute("git push --all origin", cwd=git_folder)
-        execute("git push --tags origin", cwd=git_folder)
-
-    for brepo, grepo in repositories_to_migrate.items():
-        step("Migrate issues and pull requests of bitbucket repository '{}' to github".format(brepo))
-        execute("./migrate-discussions.py {} --github-access-token {} --bitbucket-repository {} --github-repository {} --bitbucket-username {} --bitbucket-password {}".format(
-            "--skip-attachments" if args.skip_attachments else "",
-            args.github_access_token,
-            brepo,
-            grepo,
-            args.bitbucket_username,
-            args.bitbucket_password
-        ), cwd=ROOT)
+    if migrate_issues:
+        for bb_repo, gh_repo in repositories_to_migrate.items():
+            step(f"Migrate issues and pull requests of Bitbucket repository '{bb_repo}' to GitHub")
+            migrate_discussions.main(
+                github_access_token,
+                bb_repo,
+                gh_repo,
+                bitbucket_username,
+                bitbucket_password,
+                skip_attachments=skip_attachments,
+                update=update,
+                specific_issues=specific_issues,
+                specific_pulls=specific_pulls,
+                dry_run=dry_run,
+            )
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)

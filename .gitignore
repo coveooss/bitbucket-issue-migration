@@ -1,5 +1,7 @@
 .idea/
 .vscode/
+.mypy_cache/
+py*_venv/
 __pycache__/
 *.py[cod]
 /migration_data/*
