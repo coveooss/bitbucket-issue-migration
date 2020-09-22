@@ -2,9 +2,10 @@
 
 Warning: use at your own risk, comes with no warranty or liability of any kind. 
 
-* Set the `USER_MAPPING`, and `KNOWN_REPO_MAPPING` variables in `config.py`.
-* Run the main migration script and observe for errors:
+* Set the `USER_MAPPING`, and `KNOWN_REPO_MAPPING` variables in `config.py`. See the "Find users script" section for help populating the user mapping.
+* Run the main migration script and observe for errors
 
+Main migration CLI parameters:
 ```
 Usage: main.py [OPTIONS] BITBUCKET_REPOSITORIES...
 
@@ -81,6 +82,52 @@ The script is idempotent. It can be run several times for the same repository wi
 ## Limitations
 
 * Issue numbers are not kept. Instead the title in GitHub contains a reference to the original ID in Bitbucket
+
+## Find users script
+
+For bigger organizations, filling the user mapping can be a tiresome task. To help with this, there is the a script called `find_users.py` that attempts to create the mapping for you.
+
+Please note that neither Bitbucket nor GitHub exposes the user emails, so manual work will still be needed.
+
+The script will do the following:
+- Get all users from Bitbucket.
+- If Jira credentials are supplied, get more details about Bitbucket users from the Jira API (it is worth it!)
+- Get all users from GitHub
+- Attempt to match names in Bitbucket (and Jira) to GitHub by removing spaces, user supplied prefixes and suffixes (e.g. your company name), email domain, spaces, diacritics
+- Print the config to paste in config.py
+- Print the Bitbucket users that were not matched
+- Print the GitHub users that were not matched
+
+```
+Usage: find_users.py [OPTIONS]
+
+Options:
+  --github-access-token TEXT      [env var: GITHUB_ACCESS_TOKEN; required]
+  --github-org TEXT               [required]
+  --bitbucket-username TEXT       [env var: BITBUCKET_USERNAME; required]
+  --bitbucket-password TEXT       [env var: BITBUCKET_PASSWORD; required]
+  --bitbucket-team TEXT           [required]
+  --user-prefix TEXT              Prefix to remove to user names to attempt
+                                  matching. For example, you can remove your
+                                  company name from users login.
+
+  --user-suffix TEXT              Suffix to remove to user names to attempt
+                                  matching
+
+  --jira-url TEXT                 Your Jira instance root url, i.e.
+                                  https://yourcompany.atlassian.net/. Use Jira
+                                  to fetch more information about users
+
+  --jira-username TEXT
+  --jira-password TEXT
+  --install-completion [bash|zsh|fish|powershell|pwsh]
+                                  Install completion for the specified shell.
+  --show-completion [bash|zsh|fish|powershell|pwsh]
+                                  Show completion for the specified shell, to
+                                  copy it or customize the installation.
+
+  --help                          Show this message and exit.
+```
 
 ## Requirements
 
