@@ -27,8 +27,19 @@ Options:
                                   Go directly to issues and Pull Requests
                                   migration.  [default: True]
 
+  --migrate-issues / --no-migrate-issues
+                                  Migrate the issues and pull requests
+                                  [default: True]
+
+  --specific-issues TEXT          ID of specific Bitbucket issues to migrate,
+                                  will ignore all others
+
+  --specific-pulls TEXT           ID of specific Bitbucket Pull Requests to
+                                  migrate, will ignore all others
+
   --dry-run / --no-dry-run        Only list issues that would be
-                                  created/updated  [default: False]
+                                  created/updated. Does not apply to
+                                  repository creation.  [default: False]
 
   --update / --no-update          Skip update of existing issues  [default:
                                   True]

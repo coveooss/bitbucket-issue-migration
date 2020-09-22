@@ -26,6 +26,8 @@ class MigrationConfig:
     gh_repo: str
     gh_import: GithubImport
     skip_attachments: bool
+    specific_issues: Optional[List[str]]
+    specific_pulls: Optional[List[str]]
     update: bool
     dry_run: bool
 
@@ -636,9 +638,12 @@ def bitbucket_to_github(run_data: MigrationConfig):
 
     print("Transferring Bitbucket issues...")
     for bb_issue in bb_issues:
+        bb_issue_id = bb_issue["id"]
+        if run_data.specific_issues and str(bb_issue_id) not in run_data.specific_issues:
+            continue
+
         print_limit(run_data)
 
-        bb_issue_id = bb_issue["id"]
         existing_issue = bb_issue_id_to_gh_issue.get(bb_issue_id)
         if existing_issue:
             if run_data.update:
@@ -656,10 +661,10 @@ def bitbucket_to_github(run_data: MigrationConfig):
             run_data.gh_import.create_issue_with_comments(data, run_data.dry_run)
 
     print("Transferring Bitbucket Pull Requests")
-    for bb_pull in run_data.bb_export.get_pulls():
-        print_limit(run_data)
-
+    for bb_pull in run_data.bb_export.get_pulls(run_data.specific_pulls):
         bb_pull_id = bb_pull["id"]
+
+        print_limit(run_data)
         if bb_pull_maps_gh_pull(bb_pull):
             # Construct a GH PR
             existing_pull = bb_pull_id_to_gh_pull.get(bb_pull_id)
@@ -679,7 +684,7 @@ def bitbucket_to_github(run_data: MigrationConfig):
                 try:
                     run_data.gh_import.create_pull_with_comments(data, run_data.dry_run)
                 except:
-                    print(f"Problem creating GitHub pull from Bitbucket pull #{bb_pull_id}#")
+                    print(f"Problem creating GitHub pull from Bitbucket pull #{bb_pull_id}")
                     traceback.print_exc()
 
         else:
@@ -692,7 +697,7 @@ def bitbucket_to_github(run_data: MigrationConfig):
                     run_data.gh_import.update_issue_with_comments(existing_issue, data, run_data.dry_run)
                 else:
                     print(
-                        f"Skipping update of issue #{existing_issue} from Bitbucket pull #{bb_pull_id}... "
+                        f"Skipping update of issue #{existing_issue.number} from Bitbucket pull #{bb_pull_id}... "
                         "(--skip-update flag)"
                     )
 
@@ -712,6 +717,8 @@ def main(
     ),
     bitbucket_username: str = typer.Option(..., help="BitBucket username with access to repository"),
     bitbucket_password: str = typer.Option(...),
+    specific_issues: Optional[List[str]] = typer.Option(None),
+    specific_pulls: Optional[List[str]] = typer.Option(None),
     skip_attachments: bool = typer.Option(False, help="Skip the migration of attachments (development only!)"),
     update: bool = typer.Option(True, help="Update Github issues and Pull Requests from Bitbucket if both exists"),
     dry_run: bool = typer.Option(False, help="Skip calls to GitHub and print the payload instead"),
@@ -719,10 +726,12 @@ def main(
     """Migrate Bitbucket issues and pull requests to Github"""
     run_data = MigrationConfig(
         bb_repo=bitbucket_repository,
-        bb_export=BitbucketExport(bitbucket_repository, bitbucket_username, bitbucket_password),
+        bb_export=BitbucketExport(bitbucket_repository, username=bitbucket_username, app_password=bitbucket_password),
         gh_repo=github_repository,
         gh_import=GithubImport(github_access_token, github_repository, debug=False),
         skip_attachments=skip_attachments,
+        specific_issues=specific_issues,
+        specific_pulls=specific_pulls,
         update=update,
         dry_run=dry_run,
     )

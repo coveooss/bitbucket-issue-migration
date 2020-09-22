@@ -3,7 +3,7 @@ import datetime
 import os
 import pathlib
 from subprocess import check_call
-from typing import List
+from typing import List, Optional
 
 import typer
 from git import Repo
@@ -57,6 +57,13 @@ def main(
     clone: bool = typer.Option(
         True, help="Skip clone/pull and repo creation in GitHub. Go directly to issues and Pull Requests migration."
     ),
+    migrate_issues: bool = typer.Option(True, help="Migrate the issues and pull requests"),
+    specific_issues: Optional[List[str]] = typer.Option(
+        None, help="ID of specific Bitbucket issues to migrate, will ignore all others"
+    ),
+    specific_pulls: Optional[List[str]] = typer.Option(
+        None, help="ID of specific Bitbucket Pull Requests to migrate, will ignore all others"
+    ),
     dry_run: bool = typer.Option(
         False, help="Only list issues that would be created/updated. Does not apply to repository creation."
     ),
@@ -82,8 +89,8 @@ def main(
                 github.get_organization(organization_name).create_repo(
                     repo_name,
                     description=(
-                        f"Migrated from Bitbucket https://bitbucket.org/{bb_repo}\n"
-                        f"{bitbucket_client.get_repo_description()}"
+                        f"{bitbucket_client.get_repo_description()}\n"
+                        f"Migrated from Bitbucket https://bitbucket.org/{bb_repo}"
                     ),
                     private=True,
                     has_issues=True,
@@ -96,14 +103,24 @@ def main(
 
             if not os.path.isdir(git_folder):
                 pathlib.Path(git_folder).mkdir(parents=True, exist_ok=True)
+                print(f"Cloning Bitbucket repo https://bitbucket.org/{bb_repo} into {git_folder}")
                 repo = Repo.clone_from(f"https://bitbucket.org/{bb_repo}", git_folder)
                 repo.config_writer().set_value("core", "ignoreCase", "false")
             else:
-                # TODO: pull/update the repo instead
-                pass
+                repo = Repo(git_folder)
+                bb_remote = None
+                for remote in repo.remotes:
+                    if any("bitbucket.org" in url for url in remote.urls):
+                        bb_remote = remote
+                        continue
+                if not bb_remote:
+                    bb_remote = repo.create_remote(
+                        "bitbucket", f"https://{bitbucket_username}:{bitbucket_password}@bitbucket.org/{bb_repo}"
+                    )
+                print(f"Pulling Bitbucket repo https://bitbucket.org/{bb_repo} into {git_folder}")
+                bb_remote.pull()
 
             step(f"Adding/Ensuring remote github '{gh_repo}' to local git repository")
-            repo = Repo(git_folder)
             for remote in repo.remotes:
                 if remote.name == "github":
                     gh_remote = remote
@@ -114,20 +131,29 @@ def main(
                 )
 
             step(f"Pushing Bitbucket repo '{bb_repo}' to GitHub repo '{gh_repo}'")
-            gh_remote.push(mirror=True)
 
-    for bb_repo, gh_repo in repositories_to_migrate.items():
-        step(f"Migrate issues and pull requests of Bitbucket repository '{bb_repo}' to GitHub")
-        migrate_discussions.main(
-            github_access_token,
-            bb_repo,
-            gh_repo,
-            bitbucket_username,
-            bitbucket_password,
-            skip_attachments=skip_attachments,
-            update=update,
-            dry_run=dry_run,
-        )
+            # --mirror pushes the remotes too, let's push all branches and tags
+
+            # Pushes branches from the GitHub remote without needing to add them locally
+            gh_remote.push(f"refs/remotes/{gh_remote.name}/*:refs/heads/*")
+
+            gh_remote.push("refs/tags/*:refs/tags/*")
+
+    if migrate_issues:
+        for bb_repo, gh_repo in repositories_to_migrate.items():
+            step(f"Migrate issues and pull requests of Bitbucket repository '{bb_repo}' to GitHub")
+            migrate_discussions.main(
+                github_access_token,
+                bb_repo,
+                gh_repo,
+                bitbucket_username,
+                bitbucket_password,
+                skip_attachments=skip_attachments,
+                update=update,
+                specific_issues=specific_issues,
+                specific_pulls=specific_pulls,
+                dry_run=dry_run,
+            )
 
 
 if __name__ == "__main__":
