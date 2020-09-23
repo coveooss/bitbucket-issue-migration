@@ -88,10 +88,10 @@ def main(
     bitbucket_team: str = typer.Option(...),
     user_prefix: List[str] = typer.Option(
         None,
-        help="Prefix to remove to user names to attempt matching. "
+        help="Prefix to remove from user names to attempt matching. "
         "For example, you can remove your company name from users login.",
     ),
-    user_suffix: List[str] = typer.Option(None, help="Suffix to remove to user names to attempt matching"),
+    user_suffix: List[str] = typer.Option(None, help="Suffix to remove from user names to attempt matching"),
     jira_url: str = typer.Option(
         None,
         help="Your Jira instance root url, i.e. https://yourcompany.atlassian.net/. "

@@ -85,7 +85,7 @@ The script is idempotent. It can be run several times for the same repository wi
 
 ## Find users script
 
-For bigger organizations, filling the user mapping can be a tiresome task. To help with this, there is the a script called `find_users.py` that attempts to create the mapping for you.
+For bigger organizations, filling the user mapping can be a tiresome task. The script` find_users.py` can help with this. It attempts to create the mapping for you.
 
 Please note that neither Bitbucket nor GitHub exposes the user emails, so manual work will still be needed.
 
@@ -107,11 +107,11 @@ Options:
   --bitbucket-username TEXT       [env var: BITBUCKET_USERNAME; required]
   --bitbucket-password TEXT       [env var: BITBUCKET_PASSWORD; required]
   --bitbucket-team TEXT           [required]
-  --user-prefix TEXT              Prefix to remove to user names to attempt
+  --user-prefix TEXT              Prefix to remove from user names to attempt
                                   matching. For example, you can remove your
                                   company name from users login.
 
-  --user-suffix TEXT              Suffix to remove to user names to attempt
+  --user-suffix TEXT              Suffix to remove from user names to attempt
                                   matching
 
   --jira-url TEXT                 Your Jira instance root url, i.e.
