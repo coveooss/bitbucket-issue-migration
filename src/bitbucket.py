@@ -53,7 +53,7 @@ class BitbucketExport:
         return f"{self.team_name}/{self.short_repo_name}"
 
     def get_repo_description(self) -> str:
-        repository = get_request_content(self.repo_url, self.session)
+        repository = get_request_json(self.repo_url, self.session)
         return repository["description"]
 
     def get_issues(self) -> List[Dict[str, Any]]:

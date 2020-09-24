@@ -89,7 +89,7 @@ def main(
                 github.get_organization(organization_name).create_repo(
                     repo_name,
                     description=(
-                        f"{bitbucket_client.get_repo_description()}\n"
+                        f"{bitbucket_client.get_repo_description()} "
                         f"Migrated from Bitbucket https://bitbucket.org/{bb_repo}"
                     ),
                     private=True,
