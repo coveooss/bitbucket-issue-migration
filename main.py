@@ -37,8 +37,8 @@ def step(msg):
     print("\n[{}] === {}...".format(time, msg))
 
 
-def is_github_repo_empty(github, grepo):
-    repo = github.get_repo(grepo)
+def is_github_repo_empty(github, gh_repo):
+    repo = github.get_repo(gh_repo)
     try:
         repo.get_contents("/")
         return False
@@ -108,17 +108,19 @@ def main(
                 repo.config_writer().set_value("core", "ignoreCase", "false")
             else:
                 repo = Repo(git_folder)
-                bb_remote = None
-                for remote in repo.remotes:
-                    if any("bitbucket.org" in url for url in remote.urls):
-                        bb_remote = remote
-                        continue
-                if not bb_remote:
-                    bb_remote = repo.create_remote(
-                        "bitbucket", f"https://{bitbucket_username}:{bitbucket_password}@bitbucket.org/{bb_repo}"
-                    )
-                print(f"Pulling Bitbucket repo https://bitbucket.org/{bb_repo} into {git_folder}")
-                bb_remote.pull()
+
+            # Find or create a remote for Bitbucket
+            bb_remote = None
+            for remote in repo.remotes:
+                if any("bitbucket.org" in url for url in remote.urls):
+                    bb_remote = remote
+                    continue
+            if not bb_remote:
+                bb_remote = repo.create_remote(
+                    "bitbucket", f"https://{bitbucket_username}:{bitbucket_password}@bitbucket.org/{bb_repo}"
+                )
+            print(f"Pulling Bitbucket repo https://bitbucket.org/{bb_repo} into {git_folder}")
+            bb_remote.pull()
 
             step(f"Adding/Ensuring remote github '{gh_repo}' to local git repository")
             for remote in repo.remotes:
@@ -134,8 +136,8 @@ def main(
 
             # --mirror pushes the remotes too, let's push all branches and tags
 
-            # Pushes branches from the GitHub remote without needing to add them locally
-            gh_remote.push(f"refs/remotes/{gh_remote.name}/*:refs/heads/*")
+            # Pushes branches from the Bitbucket remote to the GitHub one without needing to create them locally
+            gh_remote.push(f"refs/remotes/{bb_remote.name}/*:refs/heads/*")
 
             gh_remote.push("refs/tags/*:refs/tags/*")
 
