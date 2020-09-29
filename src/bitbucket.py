@@ -56,6 +56,10 @@ class BitbucketExport:
         repository = get_request_json(self.repo_url, self.session)
         return repository["description"]
 
+    def get_repo_main_branch(self) -> Optional[str]:
+        repository = get_request_json(self.repo_url, self.session)
+        return repository.get("mainbranch", {}).get("name")
+
     def get_issues(self) -> List[Dict[str, Any]]:
         print("Get all bitbucket issues...")
         try:
