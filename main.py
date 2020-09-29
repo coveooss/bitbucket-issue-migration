@@ -82,11 +82,11 @@ def main(
 
             step(f"Ensuring GitHub repo exists")
             try:
-                _ = github.get_repo(gh_repo)
+                gh_repo_api = github.get_repo(gh_repo)
             except UnknownObjectException:
                 print(f"Repo {gh_repo} does not exist in GitHub, creating...")
                 organization_name, repo_name = gh_repo.split("/")
-                github.get_organization(organization_name).create_repo(
+                gh_repo_api = github.get_organization(organization_name).create_repo(
                     repo_name,
                     description=(
                         f"{bitbucket_client.get_repo_description()} "
@@ -138,8 +138,16 @@ def main(
 
             # Pushes branches from the Bitbucket remote to the GitHub one without needing to create them locally
             gh_remote.push(f"refs/remotes/{bb_remote.name}/*:refs/heads/*")
-
+            gh_remote.push(":HEAD")  # Remove "HEAD" branch created by the above command
             gh_remote.push("refs/tags/*:refs/tags/*")
+
+            # Set main branch if different
+            bb_main_branch = bitbucket_client.get_repo_main_branch()
+            if bb_main_branch:
+                gh_repo_default_branch = gh_repo_api.default_branch
+                if bb_main_branch != gh_repo_default_branch:
+                    print(f"Setting GitHub repo default branch to {bb_main_branch} (was {gh_repo_default_branch})")
+                    gh_repo_api.edit(default_branch=bb_main_branch)
 
     if migrate_issues:
         for bb_repo, gh_repo in repositories_to_migrate.items():

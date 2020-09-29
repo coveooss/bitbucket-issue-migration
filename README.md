@@ -76,6 +76,7 @@ This script migrates:
   * Open Bitbucket's pull request to Github's pull requests
   * Bitbucket's pull request activity and comments to Github's comments
   * Bitbucket's pull request state to Github's labels
+* Bitbucket's main branch to GitHub's default branch
 
 The script is idempotent. It can be run several times for the same repository without overriding data from previous attempts.
 
